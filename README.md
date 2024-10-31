@@ -30,55 +30,24 @@ Data Sources
 
 The following data sources were used in this analysis:
 
-Source
 
-Link
 
-Description
+MIT Election Lab -https://electionlab.mit.edu/data#data
 
-MIT Election Lab
 
-MIT Election Lab
+UF Election Lab https://data.cdc.gov/Vaccinations/Cumulative-Percentage-of-Adults-18-Years-and-Older/hm35-qkiu/about_data
 
-Historical election data
 
-USA Facts
+Voter turnout statistics 
 
-USAFacts
+CDC https://data.cdc.gov/Vaccinations/Cumulative-Percentage-of-Adults-18-Years-and-Older/hm35-qkiu/about_data
+https://www.cdc.gov/covidvaxview/interactive/adults.html
+https://data.cdc.gov/Vaccinations/COVID-19-Vaccinations-in-the-United-States-Jurisdi/unsk-b7fc/about_data
+https://www.cdc.gov/covidvaxview/weekly-dashboard/vaccine-administration-coverage-jurisdiction.html
+Five Thirty Eight https://github.com/fivethirtyeight/election-results/blob/main/election_results_senate.csv
+Census- Population Migration https://www.census.gov/newsroom/press-kits/2023/national-state-population-estimates.html
+NCHS- State Population Health Statistics https://www.cdc.gov/nchs/data_access/VitalStatsOnline.htm
 
-Economic indicators
-
-UF Election Lab
-
-UF Election Lab
-
-Voter turnout statistics
-
-CDC
-
-CDC Data
-
-Vaccination rates for 2023-2024 COVID-19
-
-Voting and Registration in the Election of November 2022
-
-Census.gov
-
-Census data on voting and registration
-
-National Center for Health Statistics
-
-NCHS
-
-Birth rates and mortality rates by state
-
-Five Thirty Eight
-
-FiveThirtyEight GitHub
-
-Senate election results (2020-2022)
-
-...and other sources listed in the table
 
 Model Descriptions
 
