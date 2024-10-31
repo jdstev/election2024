@@ -1,0 +1,497 @@
+---
+title: "Election 2024 Forecast"
+output: html_notebook
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+install.packages("randomForest")
+library(randomForest)
+library(ggplot2)
+library(car)
+library(caret)
+library(pROC)
+install.packages("xgboost")
+library(MASS)
+library(xgboost)
+install.packages("leaps")
+library(leaps)
+
+
+```
+
+## DATA NOTES ###
+
+## Data Sources:
+
+## VACCINE DATA: 
+##for 2024 : USED Data from CDC on Uptake of 2023/24 Seasonal Covid Shot. a few states data were missing full population vaccine uptake %, so ## data was imputed by running regression on  percentage of population 18+ and 65+
+## For 2020- used Vaccine uptake by state for year 2021. For 2022: Used Booster Uptake by STate for year.
+## Theory is that Covid Vaccine uptake is the most reliable predictor of Democratic Party allegiance. 
+
+## BIRTH RATE & MORTALITY DATA- all TAKEN FROM CDC/ NCHS
+
+## Mail In Voting- Alabama, Missouri, Montana, New Hampshire, did not have requested ballot data. NH data was imputed by calculating average of blue state (NH) ballot reqest for 2022. Red State Mail In Ballot reuquests calculated by using average of Red state mail in average percentage of mail in requested. DC did not have ballot reque
+
+## For 2024 Mail IN ballots- some states did not have Ballots requested yet ast of 10/21- Washington Sate, a state with ALL Mail IN ballots, the full registered votors from 2023 was used. For alaska, not avail yet, and Requested mail in ballots for 2022 General was used. Mississippi- mail in requested for 2022 was used. For 2024 the states Alabama, Arkansas, Oklahoma and Mississippi, the Mail IN Ballot Request total was used from 2022 General Election. For New York and New Hampshire, data was imputed using Average of BLue State % of total voting population
+
+## Comments: what is important is to train the model to be able to predict the states where there will be a close race, for highly blue or highly red states, imputed data based on historical numbers is not expected to skew the model. 
+
+## Outliers- removed Washington DC fo 2021 as an outlier as it skewed model. Removed Alaska for 2022.
+
+
+## Historical Election Results - MIT Election LAB and FIveThirtyEight Github
+
+
+
+```{r}
+
+## Read in Historical data for training
+
+data = read.csv("model_data_outlier_remove.csv",sep = ",",header = TRUE)
+```
+
+
+
+
+
+```{r}
+# Z Scoring the Vax data in order to normalize due to declining Vax Numbers year over year
+
+data <- data %>%
+  group_by(YEAR) %>%  # Grouping by YEAR
+  mutate(Z_Score_VAX_PERCENT_POP = (VAX_PERCENT_POP - mean(VAX_PERCENT_POP)) / sd(VAX_PERCENT_POP)) %>%
+  ungroup()  # Ungroup after calculation
+
+# View the updated data
+head(data)
+```
+
+```{r}
+# Apply the log transformation to the MAIL_BALLOTS_REQUESTED predictor
+data$Log_MAIL_BALLOTS_REQUESTED <- log(data$MAIL_BALLOTS_REQUESTED + 1)
+
+
+head(data)
+```
+```{r}
+#install libraries
+#library(ggplot2)
+
+## plot predictors against response to see correlations. See VAX_PERCENT_POP vs DEM_MARGIN AS EXAMPLE.
+
+plot <- ggplot(data, aes_string(x = "Z_Score_VAX_PERCENT_POP", y = "MARGIN_DEM")) + geom_point() + theme_minimal()
+
+print(plot)
+```
+```{r}
+ ### Checking all predictors for interactions
+model <- lm(MARGIN_DEM ~ (Z_Score_VAX_PERCENT_POP + MENTAL_HEALTH + DOM_MIG_RATE + 
+                          Log_MAIL_BALLOTS_REQUESTED + ALL_MAIL_STATE + FERTILITY_RATE + POVERTY_RATE +
+                          DEATH_RATE + PREV_WIN_DEM + POPULATION)^2, data = data)
+step_model <- stepAIC(model)
+```
+
+
+```{r}
+
+### InTERATION TERMS ## Creating interaction terms detected in previous stepAIC()
+
+data <- data %>%
+  mutate(
+    # Interaction terms involving Z_Score_VAX_PERCENT_POP
+    Z_VAX_MENTAL_HEALTH = Z_Score_VAX_PERCENT_POP * MENTAL_HEALTH,
+    Z_VAX_DOM_MIG = Z_Score_VAX_PERCENT_POP * DOM_MIG_RATE,
+    Z_VAX_LOG_MAIL_BALLOTS = Z_Score_VAX_PERCENT_POP * Log_MAIL_BALLOTS_REQUESTED,
+    Z_VAX_ALL_MAIL = Z_Score_VAX_PERCENT_POP * ALL_MAIL_STATE,
+    Z_VAX_POVERTY_RATE = Z_Score_VAX_PERCENT_POP * POVERTY_RATE,
+    Z_VAX_DEATH_RATE = Z_Score_VAX_PERCENT_POP * DEATH_RATE,
+    Z_VAX_PREV_WIN = Z_Score_VAX_PERCENT_POP * PREV_WIN_DEM,
+    Z_VAX_POPULATION = Z_Score_VAX_PERCENT_POP * POPULATION,
+
+    # Interaction terms involving MENTAL_HEALTH
+    MENTAL_HEALTH_DOM_MIG = MENTAL_HEALTH * DOM_MIG_RATE,
+
+    # Interaction terms involving DOM_MIG_RATE
+    DOM_MIG_LOG_MAIL_BALLOTS = DOM_MIG_RATE * Log_MAIL_BALLOTS_REQUESTED,
+    DOM_MIG_ALL_MAIL = DOM_MIG_RATE * ALL_MAIL_STATE,
+    DOM_MIG_FERTILITY = DOM_MIG_RATE * FERTILITY_RATE,
+    DOM_MIG_POVERTY_RATE = DOM_MIG_RATE * POVERTY_RATE,
+    DOM_MIG_DEATH_RATE = DOM_MIG_RATE * DEATH_RATE,
+    DOM_MIG_POPULATION = DOM_MIG_RATE * POPULATION,
+
+    # Interaction terms involving Log_MAIL_BALLOTS_REQUESTED
+    LOG_MAIL_BALLOTS_ALL_MAIL = Log_MAIL_BALLOTS_REQUESTED * ALL_MAIL_STATE,
+    LOG_MAIL_BALLOTS_FERTILITY = Log_MAIL_BALLOTS_REQUESTED * FERTILITY_RATE,
+    LOG_MAIL_BALLOTS_POPULATION = Log_MAIL_BALLOTS_REQUESTED * POPULATION,
+
+    # Interaction terms involving ALL_MAIL_STATE
+    ALL_MAIL_FERTILITY = ALL_MAIL_STATE * FERTILITY_RATE,
+    ALL_MAIL_POPULATION = ALL_MAIL_STATE * POPULATION,
+
+    # Interaction terms involving FERTILITY_RATE
+    FERTILITY_POPULATION = FERTILITY_RATE * POPULATION,
+
+    # Interaction terms involving POVERTY_RATE
+    POVERTY_PREV_WIN = POVERTY_RATE * PREV_WIN_DEM,
+
+    # Interaction terms involving DEATH_RATE
+    DEATH_RATE_PREV_WIN = DEATH_RATE * PREV_WIN_DEM,
+
+    # Interaction terms involving PREV_WIN_DEM
+    PREV_WIN_POPULATION = PREV_WIN_DEM * POPULATION
+  )
+```
+
+
+
+
+
+```{r}
+
+###Linear REGRESSION WITH NEW INTERACTION TERMS
+
+formula <- MARGIN_DEM ~ Z_Score_VAX_PERCENT_POP +  DOM_MIG_RATE + Log_MAIL_BALLOTS_REQUESTED + ALL_MAIL_STATE + FERTILITY_RATE + DEATH_RATE + PREV_WIN_DEM + POPULATION + Z_VAX_DOM_MIG + DOM_MIG_ALL_MAIL + Z_VAX_PREV_WIN 
+
+# Set up 10-fold cross-validation
+train_control <- trainControl(method = "cv", number = 10)
+
+# Train the linear model with 10-fold cross-validation
+set.seed(123)  # For reproducibility
+lm_model <- train(
+  formula,
+  data = data,
+  method = "lm",
+  trControl = train_control
+)
+
+# Print the results of the cross-validation
+summary(lm_model)
+
+print(lm_model)
+
+```
+
+```{r}
+vif_values <- vif(lm_model$finalModel)
+print(vif_values)
+```
+
+
+
+```{r}
+## Testing Model Assumptions to make sure none are violated
+# Test model assumptions and create residuals plot
+# Extract residuals and fitted values
+fitted_values <- predict(lm_model, newdata = data)
+residuals <- data$MARGIN_DEM - fitted_values
+
+# Plot residuals vs. fitted values
+ggplot(data, aes(x = fitted_values, y = residuals)) +
+  geom_point() +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  labs(title = "Residuals vs Fitted Values", x = "Fitted Values", y = "Residuals") +
+  theme_minimal()
+
+# Q-Q plot to check normality of residuals
+qqPlot(residuals, main = "Q-Q Plot of Residuals")
+
+# Plot histogram of residuals
+ggplot(data.frame(residuals), aes(x = residuals)) +
+  geom_histogram(binwidth = 1, fill = "blue", alpha = 0.7) +
+  labs(title = "Histogram of Residuals", x = "Residuals", y = "Frequency") +
+  theme_minimal()
+
+# Check for homoscedasticity
+ncvTest(lm(formula, data = data))
+
+# Check for multicollinearity
+vif_values <- vif(lm(formula, data = data))
+print(vif_values)
+
+```
+
+
+```{r}
+## Logistic regression- Converting response to binary
+# Create the DEM_WIN column based on the MARGIN_DEM column
+data$DEM_WIN <- ifelse(data$MARGIN_DEM > 0, 1, 0)
+
+# View the first few rows to check the new column
+head(data)
+```
+
+
+```{r}
+#creating a test/train split for log reg
+
+# Code chunk not needed as we are doing Cross Validation in an Elastic Net logistic regression model.
+
+#trainIndex <- createDataPartition(data$DEM_WIN, p = 0.7, list = FALSE)
+#train_data <- data[trainIndex, ]
+#test_data <- data[-trainIndex, ]
+
+
+
+
+```
+
+
+```{r}
+# Prepare data for logistic regression, use Elastic Net Regularization 
+# Prepare data for logistic regression
+x <- as.matrix(data[, c("Z_Score_VAX_PERCENT_POP", "MENTAL_HEALTH", "DOM_MIG_RATE", "Z_VAX_MENTAL_HEALTH", "Log_MAIL_BALLOTS_REQUESTED", "ALL_MAIL_STATE", "FERTILITY_RATE", "DEATH_RATE", "PREV_WIN_DEM", "Z_VAX_DOM_MIG", "DOM_MIG_ALL_MAIL", "Z_VAX_PREV_WIN")])
+y <- factor(data$DEM_WIN, levels = c(0, 1))
+
+# Set up cross-validation for Elastic Net
+train_control <- trainControl(method = "cv", number = 10)
+
+# Train Elastic Net logistic regression model
+set.seed(123)
+logistic_model <- train(
+  x, y,
+  method = "glmnet",
+  trControl = train_control,
+  tuneGrid = expand.grid(alpha = seq(0, 1, length = 10), lambda = seq(0.001, 1, length = 100)),
+  family = "binomial"
+)
+
+# Print cross-validation results
+print(logistic_model)
+
+# Predict probabilities on the dataset
+predicted_prob <- predict(logistic_model$finalModel, newx = x, s = logistic_model$bestTune$lambda, type = "response")
+
+# Classify predictions as 1 or 0 based on a threshold of 0.5
+predicted_class <- ifelse(predicted_prob > 0.5, 1, 0)
+
+# Store the predicted responses and actual responses in data frames
+predicted_df <- data.frame(Predicted = predicted_class)
+actual_df <- data.frame(Actual = y)
+
+# Convert to factors for confusion matrix calculation
+predicted_factor <- factor(predicted_class, levels = c(0, 1))
+actual_factor <- factor(y, levels = c(0, 1))
+
+# Calculate the confusion matrix
+conf_matrix <- confusionMatrix(predicted_factor, actual_factor)
+print(conf_matrix)
+
+# Calculate accuracy, sensitivity, and specificity
+accuracy <- conf_matrix$overall["Accuracy"]
+sensitivity <- conf_matrix$byClass["Sensitivity"]
+specificity <- conf_matrix$byClass["Specificity"]
+
+# Print accuracy metrics
+cat("Accuracy:", accuracy, "\n")
+cat("Sensitivity:", sensitivity, "\n")
+cat("Specificity:", specificity, "\n")
+
+```
+
+
+
+
+
+```{r}
+
+# Train Random Forest model with cross-validation
+set.seed(123)  # For reproducibility
+
+# Define the formula for the model
+formula <- MARGIN_DEM ~ Z_Score_VAX_PERCENT_POP + Log_MAIL_BALLOTS_REQUESTED + Z_VAX_DOM_MIG +  ALL_MAIL_STATE + DOM_MIG_RATE + FERTILITY_RATE + DEATH_RATE + PREV_WIN_DEM + POPULATION
+
+
+random_forest_model <- train(
+  formula,
+  data = data,
+  method = "rf",
+  trControl = train_control,
+  tuneLength = 10
+)
+
+# Print the results of the cross-validation for Random Forest
+print(random_forest_model)
+print(random_forest_model$results)
+
+# Summary of the Random Forest model
+print(random_forest_model)
+
+# Extract variable importance from Random Forest model
+rf_importance <- varImp(random_forest_model, scale = FALSE)
+print(rf_importance)
+
+# Plot variable importance
+plot(rf_importance, main = "Variable Importance in Random Forest Model")
+```
+
+
+
+
+
+
+
+```{r}
+### FINAL STEP 1: TRAINING ALL MODELS ON FULL DATA SET ###
+
+# (a) Train the Linear Model (glm) for MARGIN_DEM
+lm_model <- lm(MARGIN_DEM ~ Z_Score_VAX_PERCENT_POP +  DOM_MIG_RATE + Log_MAIL_BALLOTS_REQUESTED + ALL_MAIL_STATE + FERTILITY_RATE + DEATH_RATE + PREV_WIN_DEM + POPULATION + Z_VAX_DOM_MIG + DOM_MIG_ALL_MAIL + Z_VAX_PREV_WIN, data = data)
+
+
+
+# (b) # Train Elastic Net logistic regression model on full dataset
+log_model <- glmnet(
+  x, y,
+  alpha = 0.5, # You can adjust alpha between 0 (Ridge) and 1 (Lasso)
+  lambda = 0.01, # Adjust lambda as needed
+  family = "binomial"
+)
+
+
+
+# (c) Train the Random Forest Model for MARGIN_DEM
+rf_model <- randomForest(MARGIN_DEM ~ Z_Score_VAX_PERCENT_POP + Log_MAIL_BALLOTS_REQUESTED + Z_VAX_DOM_MIG +  ALL_MAIL_STATE + DOM_MIG_RATE + FERTILITY_RATE + DEATH_RATE + PREV_WIN_DEM + POPULATION, 
+                         data = data, ntree = 200)
+
+
+```
+
+
+```{r}
+### STEP 2: LOAD new PREDICTION SET, DO DATA TRANSFORMATIONS FOR ABSENTEE BALLOTS, VAX_PERCENT, and INTERACTION TERMS
+
+
+# Step 3: Load the new prediction dataset
+predict_data <- read.csv("predict_data.csv", sep = ",", header = TRUE)
+
+# Step 4 - DATA TRANSFORMATIONS
+
+## Z Scoring VAX Data 
+predict_data <- predict_data %>%
+  group_by(YEAR) %>%  # Grouping by YEAR
+  mutate(Z_Score_VAX_PERCENT_POP = (VAX_PERCENT_POP - mean(VAX_PERCENT_POP)) / sd(VAX_PERCENT_POP)) %>%
+  ungroup()  # Ungroup after calculation
+
+
+# Transform MAIL_BALLOTS_REQUESTED TO ADJUST FOR HEAVY TAIL
+predict_data$Log_MAIL_BALLOTS_REQUESTED <- log(predict_data$MAIL_BALLOTS_REQUESTED + 1)
+
+
+# Create new interaction terms in predict_data
+predict_data <- predict_data %>%
+  mutate(
+    Z_VAX_DOM_MIG = Z_Score_VAX_PERCENT_POP * DOM_MIG_RATE,
+    DOM_MIG_ALL_MAIL = DOM_MIG_RATE * ALL_MAIL_STATE,
+    Z_VAX_PREV_WIN = Z_Score_VAX_PERCENT_POP * PREV_WIN_DEM,
+    Z_VAX_MENTAL_HEALTH = Z_Score_VAX_PERCENT_POP * MENTAL_HEALTH
+  )
+
+# View the updated data
+head(predict_data)
+
+```
+
+
+```{r}
+
+# Step 5: Make predictions on the new prediction dataset
+
+# (a) Linear Model Predictions
+predict_data$linear_predict <- predict(lm_model, newdata = predict_data)
+
+# (b) Logistic Regression Predictions (use a threshold of 0.5)
+predict_x <- as.matrix(predict_data[, c("Z_Score_VAX_PERCENT_POP", "MENTAL_HEALTH", "DOM_MIG_RATE", "Z_VAX_MENTAL_HEALTH", "Log_MAIL_BALLOTS_REQUESTED", "ALL_MAIL_STATE", "FERTILITY_RATE", "DEATH_RATE", "PREV_WIN_DEM", "Z_VAX_DOM_MIG", "DOM_MIG_ALL_MAIL", "Z_VAX_PREV_WIN")])
+predict_prob <- predict(log_model, newx = predict_x, type = "response")
+predict_data$elastic_net_predict <- ifelse(predict_prob > 0.5, 1, 0)
+
+
+# (c) Random Forest Model Predictions
+predict_data$rf_predict <- predict(rf_model, newdata = predict_data)
+
+# Step 5: View the updated prediction dataset
+head(predict_data)
+
+
+```
+
+
+```{r}
+
+# Step 6: Write predictions to new csv
+write.csv(predict_data, "predict_data_with_predictions_2.csv", row.names = FALSE)
+
+
+```
+
+```{r}
+
+#Step 7: Create new data frame with selected columns from 'data' and 'predict_data'
+selected_columns <- c("YEAR", "STATE", "PREV_WIN_DEM", "POPULATION", "MAIL_BALLOTS_REQUESTED", "ALL_MAIL_STATE", "FERTILITY_RATE", "POVERTY_RATE", "DOM_MIG_RATE", "DEATH_RATE", "MENTAL_HEALTH", "VAX_PERCENT_POP", "Z_Score_VAX_PERCENT_POP", "Log_MAIL_BALLOTS_REQUESTED", "Z_VAX_DOM_MIG", "DOM_MIG_ALL_MAIL", "Z_VAX_PREV_WIN", "Z_VAX_MENTAL_HEALTH")
+
+combined_data <- rbind(
+  data[, selected_columns],
+  predict_data[, selected_columns]
+)
+
+# View the combined data frame
+head(combined_data)
+
+```
+
+```{r}
+write.csv(combined_data, "combined_data.csv", row.names = FALSE)
+```
+```{r}
+
+```
+
+```{r}
+
+## Swing State Analysis
+# Update YEAR values from 2021 to 2020 in combined_data (ELECTION DATA FROM )
+#combined_data$YEAR[combined_data$YEAR == 2021] <- 2020
+
+# Define swing states
+swing_states <- c("AZ", "NV", "WI", "GA", "NC", "PA", "MI")
+
+# Filter data for swing states
+swing_data <- combined_data %>% filter(STATE %in% swing_states)
+```
+
+
+```{r}
+swing_summary <- swing_data %>%
+  group_by(STATE, YEAR) %>%
+  summarize(
+    avg_vax_uptake = mean(Z_Score_VAX_PERCENT_POP, na.rm = TRUE),
+    avg_mail_in_ballots = mean(MAIL_BALLOTS_REQUESTED, na.rm = TRUE),
+    avg_dom_mig_rate = mean(DOM_MIG_RATE, na.rm = TRUE)
+  )
+
+# (c) Domestic Migration Rate Over Time
+ggplot(swing_summary, aes(x = YEAR, y = avg_dom_mig_rate, color = STATE)) +
+  geom_line() +
+  labs(title = "Domestic Migration Rate Over Time in Swing States", x = "Year", y = "Domestic Migration Rate (%)")
+
+# (b) Mail-In Ballot Requests Over Time
+ggplot(swing_summary, aes(x = YEAR, y = avg_mail_in_ballots, color = STATE)) +
+  geom_line() +
+  labs(title = "Mail-In Ballot Requests Over Time in Swing States", x = "Year", y = "Mail-In Ballot Requests")
+
+# (a) Vaccine Uptake Over Time
+ggplot(swing_summary, aes(x = YEAR, y = avg_vax_uptake, color = STATE)) +
+  geom_line() +
+  labs(title = "Covid-19 Shot Uptake Over Time in Swing States", x = "Year", y = "Covid-19 Shot Uptake (Z-Score)")
+
+```
+
+
+
+
+
+
+
+
+
